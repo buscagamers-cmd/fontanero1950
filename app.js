@@ -1,7 +1,7 @@
 /* Fontanero 1950 Admin Panel - Business Logic and Bot Simulator */
 
 // CONFIGURACIÓN DE BASE DE DATOS NEON
-const DB_CONN_STR = "postgresql://neondb_owner:npg_9Za8KYRFIlkP@ep-patient-dream-at0vuvw4-pooler.c-9.us-east-1.aws.neon.tech/neondb?sslmode=require";
+const DB_CONN_STR = "postgresql://neondb_owner:npg_0mcIlsQ3uMEv@ep-patient-dream-at0vuvw4-pooler.c-9.us-east-1.aws.neon.tech/neondb?sslmode=require";
 const DB_ENDPOINT = "https://ep-patient-dream-at0vuvw4-pooler.c-9.us-east-1.aws.neon.tech/sql";
 
 async function dbQuery(query, params = []) {
