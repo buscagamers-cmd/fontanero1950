@@ -1,5 +1,193 @@
 /* Fontanero 1950 Admin Panel - Business Logic and Bot Simulator */
 
+// CONFIGURACIÓN DE BASE DE DATOS NEON
+const DB_CONN_STR = "postgresql://neondb_owner:npg_9Za8KYRFIlkP@ep-patient-dream-at0vuvw4-pooler.c-9.us-east-1.aws.neon.tech/neondb?sslmode=require";
+const DB_ENDPOINT = "https://ep-patient-dream-at0vuvw4-pooler.c-9.us-east-1.aws.neon.tech/sql";
+
+async function dbQuery(query, params = []) {
+    try {
+        const response = await fetch(DB_ENDPOINT, {
+            method: "POST",
+            headers: {
+                "Neon-Connection-String": DB_CONN_STR,
+                "Neon-Raw-Text-Output": "true",
+                "Neon-Array-Mode": "true",
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ query, params })
+        });
+        
+        if (!response.ok) {
+            const errorText = await response.text();
+            throw new Error(`Neon SQL error: ${errorText}`);
+        }
+        
+        const data = await response.json();
+        if (!data || !data.fields || !data.rows) return [];
+        const fields = data.fields;
+        return data.rows.map(row => {
+            const obj = {};
+            row.forEach((val, idx) => {
+                obj[fields[idx].name] = val;
+            });
+            return obj;
+        });
+    } catch (err) {
+        console.error("Database query failed:", err);
+        throw err;
+    }
+}
+
+async function initDatabase() {
+    const dbStatusEl = document.getElementById('db-status-text');
+    try {
+        // Crear tablas si no existen
+        await dbQuery(`
+            CREATE TABLE IF NOT EXISTS menu_items (
+                id VARCHAR PRIMARY KEY,
+                name VARCHAR,
+                price NUMERIC,
+                desc_text VARCHAR
+            );
+        `);
+        
+        await dbQuery(`
+            CREATE TABLE IF NOT EXISTS orders (
+                id INT PRIMARY KEY,
+                client_name VARCHAR,
+                client_phone VARCHAR,
+                items JSONB,
+                subtotal NUMERIC,
+                delivery_fee NUMERIC,
+                total NUMERIC,
+                payment_method VARCHAR,
+                address VARCHAR,
+                status VARCHAR,
+                timestamp_text VARCHAR,
+                driver VARCHAR,
+                driver_dispatched BOOLEAN
+            );
+        `);
+        
+        await dbQuery(`
+            CREATE TABLE IF NOT EXISTS customers (
+                phone VARCHAR PRIMARY KEY,
+                name VARCHAR,
+                orders_count INT,
+                total_spent NUMERIC,
+                fav_dish VARCHAR,
+                avg_freq_days INT,
+                last_order_date VARCHAR
+            );
+        `);
+        
+        await dbQuery(`
+            CREATE TABLE IF NOT EXISTS chats (
+                id BIGINT PRIMARY KEY,
+                client_name VARCHAR,
+                client_phone VARCHAR,
+                preset VARCHAR,
+                chat_state VARCHAR,
+                cart JSONB,
+                payment JSONB,
+                address VARCHAR,
+                active BOOLEAN,
+                takeover BOOLEAN,
+                messages JSONB
+            );
+        `);
+        
+        if (dbStatusEl) {
+            dbStatusEl.textContent = "Base de Datos Neon: Conectada ⚡";
+            dbStatusEl.style.color = "var(--color-secondary)";
+        }
+        
+        // Cargar Menú
+        const menuRows = await dbQuery("SELECT * FROM menu_items ORDER BY price ASC");
+        if (menuRows.length === 0) {
+            for (const item of state.menu) {
+                await dbQuery("INSERT INTO menu_items (id, name, price, desc_text) VALUES ($1, $2, $3, $4)", [item.id, item.name, item.price, item.desc]);
+            }
+        } else {
+            state.menu = menuRows.map(r => ({ id: r.id, name: r.name, price: Number(r.price), desc: r.desc_text }));
+        }
+
+        // Cargar Pedidos
+        const orderRows = await dbQuery("SELECT * FROM orders ORDER BY id ASC");
+        if (orderRows.length === 0) {
+            for (const o of state.orders) {
+                await dbQuery("INSERT INTO orders (id, client_name, client_phone, items, subtotal, delivery_fee, total, payment_method, address, status, timestamp_text, driver, driver_dispatched) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)", 
+                    [o.id, o.clientName, o.clientPhone, JSON.stringify(o.items), o.subtotal, o.deliveryFee, o.total, o.paymentMethod, o.address, o.status, o.timestamp, o.driver, o.driverDispatched]);
+            }
+        } else {
+            state.orders = orderRows.map(r => ({
+                id: Number(r.id),
+                clientName: r.client_name,
+                clientPhone: r.client_phone,
+                items: typeof r.items === "string" ? JSON.parse(r.items) : r.items,
+                subtotal: Number(r.subtotal),
+                deliveryFee: Number(r.delivery_fee),
+                total: Number(r.total),
+                paymentMethod: r.payment_method,
+                address: r.address,
+                status: r.status,
+                timestamp: r.timestamp_text,
+                driver: r.driver,
+                driverDispatched: r.driver_dispatched
+            }));
+        }
+
+        // Cargar Clientes
+        const customerRows = await dbQuery("SELECT * FROM customers");
+        if (customerRows.length === 0) {
+            for (const c of state.customers) {
+                await dbQuery("INSERT INTO customers (phone, name, orders_count, total_spent, fav_dish, avg_freq_days, last_order_date) VALUES ($1, $2, $3, $4, $5, $6, $7)", 
+                    [c.phone, c.name, c.ordersCount, c.totalSpent, c.favDish, c.avgFreqDays, c.lastOrderDate]);
+            }
+        } else {
+            state.customers = customerRows.map(r => ({
+                phone: r.phone,
+                name: r.name,
+                ordersCount: Number(r.orders_count),
+                totalSpent: Number(r.total_spent),
+                favDish: r.fav_dish,
+                avgFreqDays: Number(r.avg_freq_days),
+                lastOrderDate: r.last_order_date
+            }));
+        }
+
+        // Cargar Chats
+        const chatRows = await dbQuery("SELECT * FROM chats ORDER BY id ASC");
+        state.chats = chatRows.map(r => ({
+            id: Number(r.id),
+            clientName: r.client_name,
+            clientPhone: r.client_phone,
+            preset: r.preset,
+            state: r.chat_state,
+            cart: typeof r.cart === "string" ? JSON.parse(r.cart) : r.cart,
+            payment: typeof r.payment === "string" ? JSON.parse(r.payment) : r.payment,
+            address: r.address,
+            active: r.active,
+            takeover: r.takeover,
+            messages: typeof r.messages === "string" ? JSON.parse(r.messages) : r.messages
+        }));
+        
+        // Re-renderizado de todo
+        renderDashboard();
+        renderChatsList();
+        renderOrdersTable();
+        renderCustomersTab();
+        renderConfigMenuList();
+        
+    } catch (err) {
+        console.error("Error al inicializar la base de datos:", err);
+        if (dbStatusEl) {
+            dbStatusEl.textContent = "Error de Base de Datos ❌";
+            dbStatusEl.style.color = "#f43f5e";
+        }
+    }
+}
+
 // ESTADO GLOBAL DE LA APLICACIÓN
 const state = {
     // Nombre comercial actualizado
@@ -187,6 +375,9 @@ document.addEventListener('DOMContentLoaded', () => {
     renderActivityLog();
     
     addActivityLog('system', 'Panel de Control de Fontanero 1950 listo.');
+    
+    // Inicializar conexión con base de datos Neon
+    initDatabase();
 });
 
 // CLOCK
@@ -378,6 +569,9 @@ function setupChatSystem() {
         const modeText = chat.takeover ? 'MODO MANUAL' : 'MODO BOT ACTIVO';
         addActivityLog('system', `Chat de ${chat.clientName} en ${modeText}`);
         
+        // Guardar takeover en base de datos
+        dbQuery("UPDATE chats SET takeover = $1 WHERE id = $2", [chat.takeover, chat.id]).catch(err => console.error(err));
+
         if (!chat.takeover && chat.state !== 'COMPLETED') {
             runBotDecisionTree(chat, '[RE-ACTIVACIÓN]');
         }
@@ -447,6 +641,11 @@ function spawnSimulatedClient() {
     renderChatsList();
     selectChat(randomId);
 
+    // Guardar chat en base de datos
+    dbQuery("INSERT INTO chats (id, client_name, client_phone, preset, chat_state, cart, payment, address, active, takeover, messages) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)", 
+        [newChat.id, newChat.clientName, newChat.clientPhone, newChat.preset, newChat.state, JSON.stringify(newChat.cart), JSON.stringify(newChat.payment), newChat.address, newChat.active, newChat.takeover, JSON.stringify(newChat.messages)]
+    ).catch(err => console.error(err));
+
     setTimeout(() => {
         simulateUserMessage(newChat, 'Hola, quiero pedir una pizza.');
     }, 500);
@@ -475,6 +674,11 @@ function addChatMessage(chat, sender, text) {
         renderActiveChatMessages();
     }
     renderChatsList();
+
+    // Actualizar chat completo en la base de datos
+    dbQuery("UPDATE chats SET messages = $1, chat_state = $2, takeover = $3, cart = $4, payment = $5, address = $6 WHERE id = $7", 
+        [JSON.stringify(chat.messages), chat.state, chat.takeover, JSON.stringify(chat.cart), JSON.stringify(chat.payment), chat.address, chat.id]
+    ).catch(err => console.error(err));
 }
 
 function showBotTypingIndicator() {
@@ -702,6 +906,11 @@ function createOrderFromChat(chat) {
     playSound('order');
     addActivityLog('order', `¡NUEVO PEDIDO CONFIRMADO! #${orderId} de ${chat.clientName} por ${formatCurrency(total)}`);
     
+    // Guardar pedido en base de datos
+    dbQuery("INSERT INTO orders (id, client_name, client_phone, items, subtotal, delivery_fee, total, payment_method, address, status, timestamp_text, driver, driver_dispatched) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)", 
+        [newOrder.id, newOrder.clientName, newOrder.clientPhone, JSON.stringify(newOrder.items), newOrder.subtotal, newOrder.deliveryFee, newOrder.total, newOrder.paymentMethod, newOrder.address, newOrder.status, newOrder.timestamp, newOrder.driver, newOrder.driverDispatched]
+    ).catch(err => console.error(err));
+
     // Guardar/actualizar base de datos predictiva de clientes
     registerOrUpdateCustomer(newOrder);
     
@@ -743,6 +952,11 @@ function registerOrUpdateCustomer(order) {
             client.favDish = order.items[0].name;
         }
     }
+
+    // Guardar o actualizar cliente en base de datos
+    dbQuery("INSERT INTO customers (phone, name, orders_count, total_spent, fav_dish, avg_freq_days, last_order_date) VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (phone) DO UPDATE SET name = EXCLUDED.name, orders_count = EXCLUDED.orders_count, total_spent = EXCLUDED.total_spent, fav_dish = EXCLUDED.fav_dish, avg_freq_days = EXCLUDED.avg_freq_days, last_order_date = EXCLUDED.last_order_date", 
+        [client.phone, client.name, client.ordersCount, client.totalSpent, client.favDish, client.avgFreqDays, client.lastOrderDate]
+    ).catch(err => console.error(err));
 
     renderCustomersTab();
 }
@@ -1231,6 +1445,9 @@ window.advanceOrderStatus = function(orderId, newStatus) {
         addActivityLog('order', `Pedido #${orderId} de ${order.clientName} está en bandeja de despacho.`);
     }
 
+    // Actualizar estado del pedido en base de datos
+    dbQuery("UPDATE orders SET status = $1 WHERE id = $2", [newStatus, orderId]).catch(err => console.error(err));
+
     renderDashboard();
     renderOrdersTable();
 };
@@ -1247,6 +1464,9 @@ window.assignDriver = function(orderId, driverName) {
 
     addActivityLog('system', `Pedido #${orderId} asignado a: ${driverName || 'Ninguno'}`);
     
+    // Actualizar repartidor y estado en base de datos
+    dbQuery("UPDATE orders SET driver = $1, status = $2 WHERE id = $3", [order.driver, order.status, orderId]).catch(err => console.error(err));
+
     renderDashboard();
     renderOrdersTable();
 };
@@ -1299,6 +1519,9 @@ function confirmDispatchDelivery() {
             order.driverDispatched = true;
             addActivityLog('delivery', `Pedido #${order.id} despachado. ${order.driver} en viaje.`);
             sendOutboundDispatchNotification(order);
+
+            // Actualizar despacho en base de datos
+            dbQuery("UPDATE orders SET status = 'en_camino', driver_dispatched = true WHERE id = $1", [order.id]).catch(err => console.error(err));
         }
     }
     hideDispatchModal();
@@ -1350,11 +1573,17 @@ function setupConfigSystem() {
                 pizza.desc = itemDesc;
                 pizza.price = itemPrice;
                 addActivityLog('system', `Menú modificado: Pizza de ${itemName}`);
+                
+                // Actualizar en base de datos
+                dbQuery("UPDATE menu_items SET name = $1, desc_text = $2, price = $3 WHERE id = $4", [itemName, itemDesc, itemPrice, itemId]).catch(err => console.error(err));
             }
         } else {
             const newId = itemName.toLowerCase().replace(/\s+/g, '-');
             state.menu.push({ id: newId, name: itemName, price: itemPrice, desc: itemDesc });
             addActivityLog('system', `Nueva pizza agregada: ${itemName}`);
+            
+            // Insertar en base de datos
+            dbQuery("INSERT INTO menu_items (id, name, price, desc_text) VALUES ($1, $2, $3, $4)", [newId, itemName, itemPrice, itemDesc]).catch(err => console.error(err));
         }
 
         closeMenuModal();
@@ -1398,6 +1627,10 @@ window.deleteMenuItem = function(id) {
     if (confirm(`¿Seguro que deseas eliminar la pizza de ${pizza.name} del menú?`)) {
         state.menu = state.menu.filter(p => p.id !== id);
         addActivityLog('system', `Eliminada pizza del menú: ${pizza.name}`);
+        
+        // Eliminar de base de datos
+        dbQuery("DELETE FROM menu_items WHERE id = $1", [id]).catch(err => console.error(err));
+        
         renderConfigMenuList();
     }
 };
@@ -1512,6 +1745,11 @@ function runPresetSimulation(presetType) {
     state.chats.push(chat);
     renderChatsList();
     selectChat(randomId);
+
+    // Guardar chat en base de datos
+    dbQuery("INSERT INTO chats (id, client_name, client_phone, preset, chat_state, cart, payment, address, active, takeover, messages) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)", 
+        [chat.id, chat.clientName, chat.clientPhone, chat.preset, chat.state, JSON.stringify(chat.cart), JSON.stringify(chat.payment), chat.address, chat.active, chat.takeover, JSON.stringify(chat.messages)]
+    ).catch(err => console.error(err));
 
     let currentStep = 0;
     
